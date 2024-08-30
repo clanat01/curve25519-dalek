@@ -326,6 +326,19 @@ impl SigningKey {
         )
     }
 
+    /// Sign a `message` with this [`SigningKey`] using the Ed25519ctx algorithm.
+    pub fn sign_with_context(
+        &self,
+        message: &[u8],
+        context: Option<&[u8]>,
+    ) -> Result<Signature, SignatureError> {
+        ExpandedSecretKey::from(&self.secret_key).raw_sign_with_context::<Sha512>(
+            message,
+            &self.verifying_key,
+            context,
+        )
+    }
+
     /// Verify a signature on a message with this signing key's public key.
     pub fn verify(&self, message: &[u8], signature: &Signature) -> Result<(), SignatureError> {
         self.verifying_key.verify(message, signature)
@@ -899,6 +912,61 @@ impl ExpandedSecretKey {
             .chain_update(R.as_bytes())
             .chain_update(verifying_key.as_bytes())
             .chain_update(&prehash[..]);
+
+        let k = Scalar::from_hash(h);
+        let s: Scalar = (k * self.scalar) + r;
+
+        Ok(InternalSignature { R, s }.into())
+    }
+
+    pub(crate) fn raw_sign_with_context<CtxDigest>(
+        &self,
+        message: &[u8],
+        verifying_key: &VerifyingKey,
+        context: Option<&[u8]>,
+    ) -> Result<Signature, SignatureError>
+    where
+        CtxDigest: Digest<OutputSize = U64>,
+    {
+        let ctx: &[u8] = context.unwrap_or(b""); // By default, the context is an empty string.
+
+        if ctx.len() > 255 {
+            return Err(SignatureError::from(InternalError::ContextLength));
+        }
+
+        let ctx_len: u8 = ctx.len() as u8;
+
+        // This is the dumbest, ten-years-late, non-admission of fucking up the
+        // domain separation I have ever seen.  Why am I still required to put
+        // the upper half "prefix" of the hashed "secret key" in here?  Why
+        // can't the user just supply their own nonce and decide for themselves
+        // whether or not they want a deterministic signature scheme?  Why does
+        // the message go into what's ostensibly the signature domain separation
+        // hash?  Why wasn't there always a way to provide a context string?
+        //
+        // ...
+        //
+        // This is a really fucking stupid bandaid, and the damned scheme is
+        // still bleeding from malleability, for fuck's sake.
+        let mut h = CtxDigest::new()
+            .chain_update(b"SigEd25519 no Ed25519 collisions")
+            .chain_update([0]) // Ed25519ctx
+            .chain_update([ctx_len])
+            .chain_update(ctx)
+            .chain_update(self.hash_prefix)
+            .chain_update(&message);
+
+        let r = Scalar::from_hash(h);
+        let R: CompressedEdwardsY = EdwardsPoint::mul_base(&r).compress();
+
+        h = CtxDigest::new()
+            .chain_update(b"SigEd25519 no Ed25519 collisions")
+            .chain_update([0]) // Ed25519ctx
+            .chain_update([ctx_len])
+            .chain_update(ctx)
+            .chain_update(R.as_bytes())
+            .chain_update(verifying_key.as_bytes())
+            .chain_update(&message);
 
         let k = Scalar::from_hash(h);
         let s: Scalar = (k * self.scalar) + r;

@@ -50,6 +50,8 @@ pub(crate) enum InternalError {
     /// An ed25519ph signature can only take up to 255 octets of context.
     #[cfg(feature = "digest")]
     PrehashedContextLength,
+    /// An ed25519ctx signature can only take up to 255 octets of context.
+    ContextLength,
     /// A mismatched (public, secret) key pair.
     MismatchedKeypair,
 }
@@ -81,6 +83,10 @@ impl Display for InternalError {
             InternalError::PrehashedContextLength => write!(
                 f,
                 "An ed25519ph signature can only take up to 255 octets of context"
+            ),
+            InternalError::ContextLength => write!(
+                f,
+                "An ed25519ctx signature can only take up to 255 octets of context"
             ),
             InternalError::MismatchedKeypair => write!(f, "Mismatched Keypair detected"),
         }
